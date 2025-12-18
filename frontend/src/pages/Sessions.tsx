@@ -88,11 +88,12 @@ export default function Sessions() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {sessions.map((session) => (
-          <div key={session.session_id} className="bg-white rounded-lg shadow p-6">
+          <div key={session.sessionId || session.session_id} className="bg-white rounded-lg shadow p-6">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">{session.name}</h3>
-                <p className="text-sm text-gray-500">{session.phone_number || 'Not connected'}</p>
+                <p className="text-xs text-gray-500 break-all">Session ID: {session.sessionId || session.session_id}</p>
+                <p className="text-sm text-gray-500">{session.phoneNumber || session.phone_number || 'Not connected'}</p>
               </div>
               <span className={`px-2 py-1 text-xs font-semibold rounded ${getStatusColor(session.status)}`}>
                 {session.status}
@@ -104,7 +105,7 @@ export default function Sessions() {
                 <button
                   onClick={() => {
                     setSelectedSession(session);
-                    fetchQRCode(session.session_id);
+                    fetchQRCode(session.sessionId || session.session_id);
                   }}
                   className="flex-1 px-3 py-2 text-sm text-primary bg-primary/10 rounded hover:bg-primary/20"
                 >
@@ -113,7 +114,7 @@ export default function Sessions() {
                 </button>
               )}
               <button
-                onClick={() => deleteSession(session.session_id)}
+                onClick={() => deleteSession(session.sessionId || session.session_id)}
                 className="flex-1 px-3 py-2 text-sm text-red-600 bg-red-50 rounded hover:bg-red-100"
               >
                 <Trash2 className="w-4 h-4 inline mr-1" />

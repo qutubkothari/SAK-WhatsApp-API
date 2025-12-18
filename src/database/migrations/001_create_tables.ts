@@ -1,8 +1,8 @@
-import { Knex } from 'knex';
+const { Knex } = require('knex');
 
-export async function up(knex: Knex): Promise<void> {
+module.exports.up = async function(knex: typeof Knex): Promise<void> {
   // Users table
-  await knex.schema.createTable('users', (table) => {
+  await knex.schema.createTable('users', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.string('email').notNullable().unique();
     table.string('password_hash').notNullable();
@@ -20,7 +20,7 @@ export async function up(knex: Knex): Promise<void> {
   });
 
   // WhatsApp Sessions table
-  await knex.schema.createTable('sessions', (table) => {
+  await knex.schema.createTable('sessions', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('user_id').notNullable().references('id').inTable('users').onDelete('CASCADE');
     table.string('session_id').notNullable().unique();
@@ -36,7 +36,7 @@ export async function up(knex: Knex): Promise<void> {
   });
 
   // Messages table (for logging and analytics)
-  await knex.schema.createTable('messages', (table) => {
+  await knex.schema.createTable('messages', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('session_id').notNullable().references('id').inTable('sessions').onDelete('CASCADE');
     table.string('message_id');
@@ -52,7 +52,7 @@ export async function up(knex: Knex): Promise<void> {
   });
 
   // Webhooks table
-  await knex.schema.createTable('webhooks', (table) => {
+  await knex.schema.createTable('webhooks', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('session_id').notNullable().references('id').inTable('sessions').onDelete('CASCADE');
     table.string('url').notNullable();
@@ -66,7 +66,7 @@ export async function up(knex: Knex): Promise<void> {
   });
 
   // API Keys table (for multiple keys per user)
-  await knex.schema.createTable('api_keys', (table) => {
+  await knex.schema.createTable('api_keys', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('user_id').notNullable().references('id').inTable('users').onDelete('CASCADE');
     table.string('key_hash').notNullable().unique();
@@ -79,7 +79,7 @@ export async function up(knex: Knex): Promise<void> {
   });
 
   // Usage Stats table (for analytics)
-  await knex.schema.createTable('usage_stats', (table) => {
+  await knex.schema.createTable('usage_stats', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('user_id').notNullable().references('id').inTable('users').onDelete('CASCADE');
     table.uuid('session_id').references('id').inTable('sessions').onDelete('CASCADE');
@@ -94,7 +94,7 @@ export async function up(knex: Knex): Promise<void> {
   });
 
   // Invoices table
-  await knex.schema.createTable('invoices', (table) => {
+  await knex.schema.createTable('invoices', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('user_id').notNullable().references('id').inTable('users').onDelete('CASCADE');
     table.string('stripe_invoice_id').unique();
@@ -107,7 +107,7 @@ export async function up(knex: Knex): Promise<void> {
   });
 
   // Activity Logs table
-  await knex.schema.createTable('activity_logs', (table) => {
+  await knex.schema.createTable('activity_logs', (table: any) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('user_id').references('id').inTable('users').onDelete('CASCADE');
     table.uuid('session_id').references('id').inTable('sessions').onDelete('CASCADE');
@@ -126,7 +126,7 @@ export async function up(knex: Knex): Promise<void> {
   await knex.schema.raw('CREATE INDEX idx_sessions_user ON sessions(user_id)');
 }
 
-export async function down(knex: Knex): Promise<void> {
+module.exports.down = async function(knex: typeof Knex): Promise<void> {
   await knex.schema.dropTableIfExists('activity_logs');
   await knex.schema.dropTableIfExists('invoices');
   await knex.schema.dropTableIfExists('usage_stats');

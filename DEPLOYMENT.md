@@ -34,6 +34,63 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
+## 🪟 Windows: One-Command Deploy (Recommended)
+
+This repo includes `deploy-to-ec2.ps1` which uploads the code to EC2 and rebuilds the **Docker Compose** stack (recommended production path).
+
+```powershell
+\.\deploy-to-ec2.ps1 -PemKey .\SAK-Whatsapp-API.pem -EC2IP <EC2_PUBLIC_IP> -User ubuntu -Domain wapi.saksolution.com
+```
+
+### Auto-deploy on changes (Watch mode)
+
+Keeps running and redeploys whenever you change backend/frontend files.
+
+```powershell
+\.\deploy-to-ec2.ps1 -PemKey .\SAK-Whatsapp-API.pem -EC2IP <EC2_PUBLIC_IP> -User ubuntu -Domain wapi.saksolution.com -Watch
+```
+
+If you get too many redeploys (e.g., during formatting), increase debounce:
+
+```powershell
+.\deploy-to-ec2.ps1 -Watch -DebounceSeconds 5
+```
+
+## 🌍 When EC2 Public IP Changes (Domain Down)
+
+If you did **not** use an Elastic IP, changing the instance (stop/start, instance replacement, some upgrades) can change the public IP.
+
+1. Get the new instance public IPv4 address from AWS EC2 console.
+2. Update DNS **A record**:
+    - `wapi.saksolution.com` → `<NEW_EC2_PUBLIC_IP>`
+3. Wait for DNS propagation (often a few minutes; can be longer depending on TTL).
+
+Tip: `deploy-to-ec2.ps1` supports `-Domain` and will warn if DNS doesn’t match `-EC2IP`.
+
+## 💽 Increase Root Disk Size (Prevent ENOSPC Outages)
+
+If the server previously hit `ENOSPC` (disk full), increase the EBS volume in AWS **and** expand the partition/filesystem inside the instance.
+
+1. AWS Console → EC2 → **Volumes** → select the root volume → **Modify volume** → set size (e.g. `20 GiB`) → Save.
+2. SSH to the instance and expand (device names vary; check with `lsblk` first):
+
+```bash
+lsblk
+df -h /
+
+# Common on newer Nitro instances
+sudo growpart /dev/nvme0n1 1
+sudo resize2fs /dev/nvme0n1p1
+
+# Common on older instances (only if your root device is xvda)
+# sudo growpart /dev/xvda 1
+# sudo resize2fs /dev/xvda1
+
+df -h /
+```
+
+You want `/` to show the new size (e.g. ~20G) with comfortable free space.
+
 ## 📋 Prerequisites
 
 - Node.js 18+

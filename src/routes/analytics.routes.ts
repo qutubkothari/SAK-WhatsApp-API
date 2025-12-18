@@ -9,7 +9,24 @@ const router = Router();
 router.get('/usage', authenticate, async (req: any, res: Response): Promise<void> => {
   try {
     const { startDate, endDate } = req.query;
-    
+
+    const hasUsageTable = await db.schema.hasTable('usage_stats');
+    if (!hasUsageTable) {
+      res.json({
+        success: true,
+        data: {
+          daily: [],
+          summary: {
+            totalMessagesSent: 0,
+            totalMessagesReceived: 0,
+            totalMessagesFailed: 0,
+            totalApiCalls: 0
+          }
+        }
+      });
+      return;
+    }
+
     let query = db('usage_stats').where({ user_id: req.user.id });
 
     if (startDate) {
@@ -19,9 +36,7 @@ router.get('/usage', authenticate, async (req: any, res: Response): Promise<void
       query = query.where('date', '<=', endDate);
     }
 
-    const stats = await query
-      .orderBy('date', 'desc')
-      .limit(30);
+    const stats = await query.orderBy('date', 'desc').limit(30);
 
     const summary = await db('usage_stats')
       .where({ user_id: req.user.id })
@@ -37,9 +52,9 @@ router.get('/usage', authenticate, async (req: any, res: Response): Promise<void
         daily: stats,
         summary: {
           totalMessagesSent: Number(summary?.totalSent || 0) || 0,
-          totalMessagesReceived: Number(summary?.totalSent || 0) || 0,
-          totalMessagesFailed: Number(summary?.totalSent || 0) || 0,
-          totalApiCalls: Number(summary?.totalSent || 0) || 0
+          totalMessagesReceived: Number(summary?.totalReceived || 0) || 0,
+          totalMessagesFailed: Number(summary?.totalFailed || 0) || 0,
+          totalApiCalls: Number(summary?.totalApiCalls || 0) || 0
         }
       }
     });
@@ -60,24 +75,24 @@ router.get('/sessions', authenticate, async (req: any, res: Response): Promise<v
   try {
     const sessions = await db('sessions')
       .where({ user_id: req.user.id })
-      .select('session_id', 'name', 'status', 'phone_number', 'created_at');
+      .select('id', 'session_id', 'name', 'status', 'phone_number', 'created_at');
 
     const sessionStats = await Promise.all(
       sessions.map(async (session) => {
         const messages = await db('messages')
-          .where({ session_id: session.session_id })
+          .where({ session_id: session.id })
           .count('* as total')
-          .sum(db.raw("CASE WHEN status = 'sent' THEN 1 ELSE 0 END as sent"))
-          .sum(db.raw("CASE WHEN status = 'failed' THEN 1 ELSE 0 END as failed"))
+          .sum({ sent: db.raw("CASE WHEN status = 'sent' THEN 1 ELSE 0 END") })
+          .sum({ failed: db.raw("CASE WHEN status = 'failed' THEN 1 ELSE 0 END") })
           .first();
+
+        const total = Number((messages as any)?.total || 0) || 0;
+        const sent = Number((messages as any)?.sent || 0) || 0;
+        const failed = Number((messages as any)?.failed || 0) || 0;
 
         return {
           ...session,
-          messageStats: {
-            total: Number(messages?.total || 0) || 0,
-            sent: Number(messages?.total || 0) || 0,
-            failed: Number(messages?.total || 0) || 0
-          }
+          messageStats: { total, sent, failed }
         };
       })
     );

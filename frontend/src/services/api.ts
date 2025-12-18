@@ -1,7 +1,9 @@
 import axios from 'axios';
 
-const api = axios.create({
-  baseURL: '/api/v1'
+const base = (import.meta.env.VITE_API_URL as string | undefined) || `${window.location.protocol}//${window.location.host}/api/v1`;
+
+export const api = axios.create({
+  baseURL: base,
 });
 
 api.interceptors.request.use((config) => {

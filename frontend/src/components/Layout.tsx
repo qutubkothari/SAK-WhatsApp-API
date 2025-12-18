@@ -16,6 +16,7 @@ export default function Layout() {
 
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+    { name: 'Get Started', href: '/onboarding', icon: LayoutDashboard },
     { name: 'Sessions', href: '/sessions', icon: MessageSquare },
     { name: 'Analytics', href: '/analytics', icon: BarChart3 },
     { name: 'Webhooks', href: '/webhooks', icon: Webhook },

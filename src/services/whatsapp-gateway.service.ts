@@ -28,6 +28,8 @@ class WhatsAppGatewayService {
   private authBaseFolder = path.join(process.cwd(), 'whatsapp_sessions');
   private messageQueue: any[] = [];
   private processingQueue = false;
+  // LID to phone JID mapping: "@lid" -> "phone@s.whatsapp.net"
+  private lidToPhoneMap: Map<string, string> = new Map();
 
   private withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -274,20 +276,81 @@ class WhatsAppGatewayService {
       if (message.key.fromMe) continue;
 
       const type = Object.keys(message.message || {})[0];
+      const remoteJid = message.key.remoteJid || '';
+      
+      // Extract phone-based identifiers (wa_id / from_number) from the remoteJid
+      // Examples:
+      //   "918484862949@s.whatsapp.net" -> wa_id: "918484862949"
+      //   "116947849052172@lid" -> wa_id: "116947849052172" (keep @lid but add mapping)
+      let waId = '';
+      let fromNumber = '';
+      let fromJid = remoteJid;
+      let fromLid = '';
+
+      if (remoteJid.includes('@s.whatsapp.net')) {
+        // Phone-based JID
+        waId = remoteJid.split('@')[0];
+        fromNumber = waId.startsWith('+') ? waId : `+${waId}`;
+        fromJid = remoteJid;
+      } else if (remoteJid.includes('@lid')) {
+        // LID-based JID - try to extract phone from pushName or participant metadata
+        fromLid = remoteJid;
+        waId = remoteJid.split('@')[0];
+        
+        // Check if Baileys provides participant info with phone number
+        const participant = message.key.participant;
+        if (participant && participant.includes('@s.whatsapp.net')) {
+          waId = participant.split('@')[0];
+          fromNumber = waId.startsWith('+') ? waId : `+${waId}`;
+          fromJid = participant;
+          
+          // Store LID→phone mapping for auto-resolution when replying
+          this.lidToPhoneMap.set(remoteJid, participant);
+          logger.info(`Stored LID mapping: ${remoteJid} → ${participant}`);
+        } else {
+          // Cannot resolve @lid to phone number - skip webhook (replying would look like spam)
+          logger.error(`SKIPPED @lid message - cannot resolve to phone number: ${remoteJid}. Message will not trigger webhook.`);
+          continue; // Skip this message entirely
+        }
+      }
+
       logger.info(
-        `Inbound message: sessionId=${sessionId} from=${message.key.remoteJid} messageId=${message.key.id} type=${type}`
+        `Inbound message: sessionId=${sessionId} from=${fromJid} wa_id=${waId} messageId=${message.key.id} type=${type}`
       );
 
-      const messageData = {
+      // Only send webhook if we have a phone-based JID (never @lid)
+      if (!fromJid.includes('@s.whatsapp.net')) {
+        logger.warn(`Skipping webhook for non-phone JID: ${fromJid}`);
+        continue;
+      }
+
+      const messageData: any = {
         event: 'message.received',
         sessionId,
-        from: message.key.remoteJid,
+        from: fromJid, // ALWAYS phone-based JID (never @lid)
+        from_jid: fromJid,
         messageId: message.key.id,
         timestamp: message.messageTimestamp,
         type,
         text: message.message?.conversation || 
               message.message?.extendedTextMessage?.text || ''
       };
+
+      // Add phone identifiers if we have them
+      if (waId) {
+        messageData.wa_id = waId;
+      }
+      if (fromNumber) {
+        messageData.from_number = fromNumber;
+      }
+      if (fromLid) {
+        messageData.from_lid = fromLid; // Keep @lid for reference
+      }
+
+      // Add pushName if available
+      if (message.pushName) {
+        messageData.pushName = message.pushName;
+      }
 
       for (const webhook of webhooks) {
         if (eventEnabled(webhook.events, 'message.received')) {
@@ -351,9 +414,27 @@ class WhatsAppGatewayService {
     }
 
     try {
-      const jid = this.formatPhoneNumber(to);
+      // Auto-resolve @lid to phone-based JID if available
+      let targetJid = to;
+      if (to.includes('@lid')) {
+        if (this.lidToPhoneMap.has(to)) {
+          targetJid = this.lidToPhoneMap.get(to)!;
+          logger.info(`Resolved @lid: ${to} → ${targetJid}`);
+        } else {
+          // Reject @lid that we cannot resolve (would look like spam)
+          logger.error(`Cannot send to unresolved @lid: ${to}`);
+          return {
+            success: false,
+            error: 'Cannot send to @lid address - phone number not available. Customer must message you first.',
+            status: 'failed'
+          };
+        }
+      } else {
+        targetJid = this.formatPhoneNumber(to);
+      }
+      
       const sentMsg = await this.withTimeout(
-        sessionInfo.socket.sendMessage(jid, { text }),
+        sessionInfo.socket.sendMessage(targetJid, { text }),
         25000,
         'SEND_MESSAGE'
       );
@@ -390,9 +471,16 @@ class WhatsAppGatewayService {
     }
 
     try {
-      const jid = this.formatPhoneNumber(to);
+      // Auto-resolve @lid to phone-based JID if available
+      let targetJid = to;
+      if (to.includes('@lid') && this.lidToPhoneMap.has(to)) {
+        targetJid = this.lidToPhoneMap.get(to)!;
+        logger.info(`Resolved @lid: ${to} → ${targetJid}`);
+      } else {
+        targetJid = this.formatPhoneNumber(to);
+      }
       const sentMsg = await this.withTimeout(
-        sessionInfo.socket.sendMessage(jid, {
+        sessionInfo.socket.sendMessage(targetJid, {
           image: imageBuffer,
           caption: caption || ''
         }),
@@ -438,9 +526,25 @@ class WhatsAppGatewayService {
     }
 
     try {
-      const jid = this.formatPhoneNumber(to);
+      // Auto-resolve @lid to phone-based JID if available
+      let targetJid = to;
+      if (to.includes('@lid')) {
+        if (this.lidToPhoneMap.has(to)) {
+          targetJid = this.lidToPhoneMap.get(to)!;
+          logger.info(`Resolved @lid: ${to} → ${targetJid}`);
+        } else {
+          return {
+            success: false,
+            error: 'Cannot send to @lid address - phone number not available. Customer must message you first.',
+            status: 'failed'
+          };
+        }
+      } else {
+        targetJid = this.formatPhoneNumber(to);
+      }
+      
       const sentMsg = await this.withTimeout(
-        sessionInfo.socket.sendMessage(jid, {
+        sessionInfo.socket.sendMessage(targetJid, {
           document: docBuffer,
           fileName: filename,
           caption: caption || '',
@@ -488,9 +592,25 @@ class WhatsAppGatewayService {
     }
 
     try {
-      const jid = this.formatPhoneNumber(to);
+      // Auto-resolve @lid to phone-based JID if available
+      let targetJid = to;
+      if (to.includes('@lid')) {
+        if (this.lidToPhoneMap.has(to)) {
+          targetJid = this.lidToPhoneMap.get(to)!;
+          logger.info(`Resolved @lid: ${to} → ${targetJid}`);
+        } else {
+          return {
+            success: false,
+            error: 'Cannot send to @lid address - phone number not available. Customer must message you first.',
+            status: 'failed'
+          };
+        }
+      } else {
+        targetJid = this.formatPhoneNumber(to);
+      }
+      
       const sentMsg = await this.withTimeout(
-        sessionInfo.socket.sendMessage(jid, {
+        sessionInfo.socket.sendMessage(targetJid, {
           video: videoBuffer,
           caption: caption || '',
           mimetype: mimetype || 'video/mp4'

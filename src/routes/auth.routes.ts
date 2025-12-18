@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { authLimiter } from '../middleware/rateLimiter';
 import { authenticate } from '../middleware/auth';
 import logger from '../utils/logger';
+import crypto from 'crypto';
 
 const router = Router();
 
@@ -44,7 +45,7 @@ router.post('/register', authLimiter, async (req: Request, res: Response): Promi
       id: userId,
       email,
       password_hash: hashedPassword,
-      name: name || email.split('@')[0],
+      full_name: name || email.split('@')[0],
       plan: 'free',
       created_at: db.fn.now(),
       updated_at: db.fn.now()
@@ -149,7 +150,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response): Promise<
         user: {
           id: user.id,
           email: user.email,
-          name: user.name,
+          name: user.full_name,
           plan: user.plan
         }
       }
@@ -171,12 +172,22 @@ router.get('/me', authenticate, async (req: any, res: Response): Promise<void> =
   try {
     const user = await db('users')
       .where({ id: req.user.id })
-      .select('id', 'email', 'name', 'plan', 'created_at')
+      .select('id', 'email', 'full_name', 'plan', 'created_at')
       .first();
+
+    const apiUser = user
+      ? {
+          id: (user as any).id,
+          email: (user as any).email,
+          name: (user as any).full_name,
+          plan: (user as any).plan,
+          created_at: (user as any).created_at
+        }
+      : user;
 
     res.json({
       success: true,
-      data: { user }
+      data: { user: apiUser }
     });
   } catch (error) {
     logger.error('Get user error:', error);
@@ -185,6 +196,73 @@ router.get('/me', authenticate, async (req: any, res: Response): Promise<void> =
       error: {
         code: 'FETCH_USER_FAILED',
         message: 'Failed to fetch user data'
+      }
+    });
+  }
+});
+
+// Create a stable user API key (shown once)
+router.post('/api-keys', authenticate, async (req: any, res: Response): Promise<void> => {
+  try {
+    const { name = 'default' } = req.body || {};
+
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    const lastFour = rawKey.slice(-4);
+
+    const [apiKey] = await db('api_keys')
+      .insert({
+        id: uuidv4(),
+        user_id: req.user.id,
+        key_hash: keyHash,
+        name,
+        last_four: lastFour,
+        is_active: true,
+        created_at: db.fn.now()
+      })
+      .returning(['id', 'name', 'last_four', 'created_at']);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: apiKey?.id,
+        name: apiKey?.name,
+        key: rawKey,
+        lastFour,
+        createdAt: apiKey?.created_at
+      }
+    });
+  } catch (error) {
+    logger.error('Create user API key error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'API_KEY_CREATE_FAILED',
+        message: 'Failed to create API key'
+      }
+    });
+  }
+});
+
+// List your API keys (does not return raw key)
+router.get('/api-keys', authenticate, async (req: any, res: Response): Promise<void> => {
+  try {
+    const keys = await db('api_keys')
+      .where({ user_id: req.user.id })
+      .select('id', 'name', 'last_four', 'is_active', 'created_at', 'last_used_at', 'expires_at')
+      .orderBy('created_at', 'desc');
+
+    res.json({
+      success: true,
+      data: { keys }
+    });
+  } catch (error) {
+    logger.error('List user API keys error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'API_KEYS_FETCH_FAILED',
+        message: 'Failed to fetch API keys'
       }
     });
   }

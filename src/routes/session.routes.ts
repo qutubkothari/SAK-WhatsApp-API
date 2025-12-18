@@ -90,13 +90,23 @@ router.post('/', authenticate, async (req: any, res: Response): Promise<void> =>
 router.get('/', authenticate, async (req: any, res: Response): Promise<void> => {
   try {
     const sessions = await db('sessions')
-      .where({ user_id: req.user.id })
-      .select('session_id', 'name', 'status', 'phone_number', 'last_connected_at', 'created_at')
+      .where({ user_id: req.user.id, is_active: true })
+      .select('session_id', 'name', 'status', 'api_key', 'phone_number', 'last_connected_at', 'created_at')
       .orderBy('created_at', 'desc');
 
     res.json({
       success: true,
-      data: { sessions }
+      data: {
+        sessions: sessions.map((s: any) => ({
+          sessionId: s.session_id,
+          name: s.name,
+          status: s.status,
+          apiKey: s.api_key,
+          phoneNumber: s.phone_number,
+          lastConnectedAt: s.last_connected_at,
+          createdAt: s.created_at
+        }))
+      }
     });
   } catch (error) {
     logger.error('Get sessions error:', error);
@@ -131,6 +141,12 @@ router.get('/:sessionId/status', authenticate, async (req: any, res: Response): 
       return;
     }
 
+    // If the gateway lost in-memory state (e.g. container restart), trigger reconnect.
+    if (!WhatsAppGateway.hasSession(sessionId) && session.is_active) {
+      logger.info(`Auto-reconnect (status): sessionId=${sessionId} dbSessionId=${session.id}`);
+      await WhatsAppGateway.connectSession(sessionId, session.id);
+    }
+
     const status = WhatsAppGateway.getSessionStatus(sessionId);
 
     res.json({
@@ -150,6 +166,51 @@ router.get('/:sessionId/status', authenticate, async (req: any, res: Response): 
       error: {
         code: 'STATUS_FETCH_FAILED',
         message: 'Failed to fetch session status'
+      }
+    });
+    return;
+  }
+});
+
+// Get session details
+router.get('/:sessionId', authenticate, async (req: any, res: Response): Promise<void> => {
+  try {
+    const { sessionId } = req.params;
+
+    const session = await db('sessions')
+      .where({ session_id: sessionId, user_id: req.user.id, is_active: true })
+      .first();
+
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: 'SESSION_NOT_FOUND',
+          message: 'Session not found'
+        }
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        sessionId: session.session_id,
+        name: session.name,
+        status: session.status,
+        apiKey: session.api_key,
+        phoneNumber: session.phone_number,
+        lastConnectedAt: session.last_connected_at,
+        createdAt: session.created_at
+      }
+    });
+  } catch (error) {
+    logger.error('Get session error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'FETCH_SESSION_FAILED',
+        message: 'Failed to fetch session'
       }
     });
     return;
@@ -176,24 +237,23 @@ router.get('/:sessionId/qr', authenticate, async (req: any, res: Response): Prom
       return;
     }
 
-    const status = WhatsAppGateway.getSessionStatus(sessionId);
-
-    if (!status.qrCode) {
-      res.status(404).json({
-        success: false,
-        error: {
-          code: 'QR_NOT_AVAILABLE',
-          message: 'QR code not available. Session may be connected or disconnected.'
-        }
-      });
-      return;
+    // If the gateway lost in-memory state (e.g. container restart), trigger reconnect.
+    if (!WhatsAppGateway.hasSession(sessionId) && session.is_active) {
+      logger.info(`Auto-reconnect (qr): sessionId=${sessionId} dbSessionId=${session.id}`);
+      await WhatsAppGateway.connectSession(sessionId, session.id);
     }
 
+    const status = WhatsAppGateway.getSessionStatus(sessionId);
+
+    // Avoid noisy 404s during initialization; return qrCode null until available.
     res.json({
       success: true,
       data: {
-        qrCode: status.qrCode,
-        message: 'Scan this QR code with WhatsApp'
+        qrCode: status.qrCode || null,
+        connected: status.connected,
+        message: status.qrCode
+          ? 'Scan this QR code with WhatsApp'
+          : (status.connected ? 'Session is connected' : 'QR not ready yet, retry shortly')
       }
     });
   } catch (error) {

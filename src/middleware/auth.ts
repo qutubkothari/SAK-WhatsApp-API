@@ -1,6 +1,7 @@
 ﻿import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import db from '../config/database';
+import crypto from 'crypto';
 
 export interface AuthRequest extends Request {
   user?: any;
@@ -75,11 +76,40 @@ export const validateApiKey = async (
       return;
     }
 
-    const session = await db('sessions')
+    // Backward compatible: per-session API key
+    const sessionByKey = await db('sessions')
       .where({ api_key: apiKey, is_active: true })
       .first();
 
-    if (!session) {
+    if (sessionByKey) {
+      const user = await db('users')
+        .where({ id: sessionByKey.user_id, is_active: true })
+        .first();
+
+      if (!user) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'USER_INACTIVE',
+            message: 'User account is inactive'
+          }
+        });
+        return;
+      }
+
+      req.user = user;
+      (req as any).session = sessionByKey;
+      next();
+      return;
+    }
+
+    // Stable user-level API key (api_keys table)
+    const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    const userKey = await db('api_keys')
+      .where({ key_hash: keyHash, is_active: true })
+      .first();
+
+    if (!userKey) {
       res.status(403).json({
         success: false,
         error: {
@@ -91,7 +121,7 @@ export const validateApiKey = async (
     }
 
     const user = await db('users')
-      .where({ id: session.user_id, is_active: true })
+      .where({ id: userKey.user_id, is_active: true })
       .first();
 
     if (!user) {
@@ -104,6 +134,42 @@ export const validateApiKey = async (
       });
       return;
     }
+
+    // With a user-level API key we must also know which session to use.
+    const sessionExternalId =
+      (req.headers['x-session-id'] as string) ||
+      (req.query.sessionId as string) ||
+      (req.body?.sessionId as string);
+
+    if (!sessionExternalId) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'SESSION_ID_REQUIRED',
+          message: 'sessionId is required (provide x-session-id header or sessionId in body/query)'
+        }
+      });
+      return;
+    }
+
+    const session = await db('sessions')
+      .where({ session_id: sessionExternalId, user_id: user.id, is_active: true })
+      .first();
+
+    if (!session) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'INVALID_SESSION',
+          message: 'Invalid or inactive session for this API key'
+        }
+      });
+      return;
+    }
+
+    await db('api_keys')
+      .where({ id: userKey.id })
+      .update({ last_used_at: db.fn.now() });
 
     req.user = user;
     (req as any).session = session;

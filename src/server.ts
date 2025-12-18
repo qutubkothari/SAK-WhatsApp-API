@@ -9,6 +9,8 @@ import messageRoutes from './routes/message.routes';
 import webhookRoutes from './routes/webhook.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import adminRoutes from './routes/admin.routes';
+import path from 'path';
+import fs from 'fs';
 import { errorHandler } from './middleware/errorHandler';
 import { rateLimiter } from './middleware/rateLimiter';
 import logger from './utils/logger';
@@ -18,6 +20,9 @@ dotenv.config();
 
 const app: Application = express();
 const PORT = process.env.PORT || 5000;
+
+// Trust proxy - needed for rate limiter with X-Forwarded-For header from Nginx
+app.set('trust proxy', 1);
 
 // Middleware
 app.use(helmet());
@@ -48,6 +53,15 @@ app.use(`${API_PREFIX}/messages`, messageRoutes);
 app.use(`${API_PREFIX}/webhooks`, webhookRoutes);
 app.use(`${API_PREFIX}/analytics`, analyticsRoutes);
 app.use(`${API_PREFIX}/admin`, adminRoutes);
+
+// Serve frontend build if present (for PM2 serve fallback)
+const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
 
 // Error handling
 app.use(errorHandler);

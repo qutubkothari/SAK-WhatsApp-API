@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import db from '../config/database';
 import { authenticate, isAdmin } from '../middleware/auth';
 import logger from '../utils/logger';
+import crypto from 'crypto';
 
 const router = Router();
 
@@ -12,7 +13,7 @@ router.get('/users', authenticate, isAdmin, async (_req: any, res: Response): Pr
       .select(
         'id',
         'email',
-        'name',
+        db.raw('full_name as name'),
         'plan',
         'stripe_customer_id',
         'is_active',
@@ -173,6 +174,85 @@ router.put('/users/:userId/deactivate', authenticate, isAdmin, async (req: any, 
       error: {
         code: 'DEACTIVATE_USER_FAILED',
         message: 'Failed to deactivate user'
+      }
+    });
+    return;
+  }
+});
+
+// Create API key (admin only, primarily to support legacy onboarding calls)
+router.post('/api-keys', authenticate, isAdmin, async (req: any, res: Response): Promise<void> => {
+  try {
+    const { name = 'admin-key', userId } = req.body;
+    const targetUserId = userId || req.user.id;
+
+    const user = await db('users').where({ id: targetUserId }).first();
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'USER_NOT_FOUND', message: 'User not found' }
+      });
+      return;
+    }
+
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    const lastFour = rawKey.slice(-4);
+
+    const [apiKey] = await db('api_keys')
+      .insert({
+        user_id: targetUserId,
+        key_hash: keyHash,
+        name,
+        last_four: lastFour,
+        created_at: db.fn.now()
+      })
+      .returning(['id', 'name', 'last_four', 'created_at']);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: apiKey.id,
+        name: apiKey.name,
+        key: rawKey,
+        lastFour,
+        createdAt: apiKey.created_at
+      }
+    });
+  } catch (error) {
+    logger.error('Create API key error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'API_KEY_CREATE_FAILED',
+        message: 'Failed to create API key'
+      }
+    });
+    return;
+  }
+});
+
+// List API keys (admin only)
+router.get('/api-keys', authenticate, isAdmin, async (req: any, res: Response): Promise<void> => {
+  try {
+    const { userId } = req.query;
+    let query = db('api_keys').select('id', 'user_id', 'name', 'last_four', 'is_active', 'created_at', 'last_used_at');
+    if (userId) {
+      query = query.where({ user_id: userId });
+    }
+    const keys = await query.orderBy('created_at', 'desc');
+
+    res.json({
+      success: true,
+      data: { keys }
+    });
+  } catch (error) {
+    logger.error('List API keys error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'API_KEYS_FETCH_FAILED',
+        message: 'Failed to fetch API keys'
       }
     });
     return;

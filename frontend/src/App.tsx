@@ -10,6 +10,7 @@ import Webhooks from './pages/Webhooks';
 import Docs from './pages/Docs';
 import Settings from './pages/Settings';
 import Layout from './components/Layout';
+import Onboarding from './pages/Onboarding';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -36,6 +37,7 @@ function App() {
             </PrivateRoute>
           }>
             <Route index element={<Dashboard />} />
+            <Route path="onboarding" element={<Onboarding />} />
             <Route path="sessions" element={<Sessions />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="webhooks" element={<Webhooks />} />
