@@ -54,6 +54,28 @@ function Invoke-Deploy {
     Write-Host "SAK WhatsApp API - EC2 Deployment" -ForegroundColor Cyan
     Write-Host "" 
 
+    # Auto-commit and push changes to GitHub
+    Write-Host "Syncing code with GitHub..." -ForegroundColor Blue
+    try {
+        $status = git status --porcelain 2>&1
+        if ($status) {
+            Write-Host "Changes detected, committing to GitHub..." -ForegroundColor Yellow
+            git add -A
+            $commitMsg = "Auto-deploy: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            git commit -m $commitMsg 2>&1 | Out-Null
+            git push origin main 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Code synced to GitHub" -ForegroundColor Green
+            } else {
+                Write-Host "Git push failed (continuing anyway)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "No changes to commit" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "Git sync skipped (error: $($_.Exception.Message))" -ForegroundColor Yellow
+    }
+
     if (!(Test-Path $PemKey)) {
         Write-Host "PEM key not found: $PemKey" -ForegroundColor Red
         throw "Missing pem key"
