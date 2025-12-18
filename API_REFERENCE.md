@@ -1,6 +1,25 @@
 # API Reference - SAK WhatsApp API
 
-Base URL: `https://api.sakwhatsapp.com/api/v1`
+## Installation (Self-Hosted)
+
+### Prerequisites
+- Docker + Docker Compose
+- A domain pointed at your server (optional)
+
+### Run
+```bash
+docker compose up -d --build
+```
+
+### Verify
+```bash
+curl -sS http://localhost:3000/health
+```
+
+## Base URL
+
+- Self-hosted example: `http://wapi.saksolution.com/api/v1`
+- Default/example in this doc: `https://api.sakwhatsapp.com/api/v1`
 
 ## Authentication
 
@@ -13,12 +32,79 @@ Authorization: Bearer YOUR_JWT_TOKEN
 ```
 
 ### API Key Authentication
-Include API key in x-api-key header:
+Include API key in `x-api-key` header.
+
+This API supports **two** API-key modes:
+
+1) **Legacy per-session API key** (current dashboard/session key)
+- Send only: `x-api-key: <session_api_key>`
+- Session is inferred from the key.
+
+2) **Stable user API key** (recommended for client integrations)
+- Create once using `POST /auth/api-keys` (requires JWT)
+- Send:
+  - `x-api-key: <user_api_key>`
+  - `x-session-id: <sessionId>` (or `sessionId` in body/query)
+
+The stable user key does **not** change unless you rotate it; your `sessionId` can stay the same.
 ```
 x-api-key: YOUR_SESSION_API_KEY
 ```
 
 ---
+
+## 🔑 User API Keys (Stable)
+
+These endpoints let a logged-in user create/list stable API keys.
+
+### POST /auth/api-keys
+Create a new API key for the current user (returned **once**).
+
+**Headers:** `Authorization: Bearer TOKEN`
+
+**Request Body:**
+```json
+{ "name": "my-client-app" }
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "uuid",
+    "name": "my-client-app",
+    "key": "<RAW_KEY_SHOWN_ONCE>",
+    "lastFour": "abcd",
+    "createdAt": "2025-12-14T00:00:00.000Z"
+  }
+}
+```
+
+### GET /auth/api-keys
+List API keys for the current user (raw key is never returned).
+
+**Headers:** `Authorization: Bearer TOKEN`
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "keys": [
+      {
+        "id": "uuid",
+        "name": "my-client-app",
+        "last_four": "abcd",
+        "is_active": true,
+        "created_at": "2025-12-14T00:00:00.000Z",
+        "last_used_at": null,
+        "expires_at": null
+      }
+    ]
+  }
+}
+```
 
 ## 🔐 Authentication Endpoints
 
@@ -207,7 +293,9 @@ Disconnect and delete session.
 ### POST /messages/send
 Send a text message.
 
-**Headers:** `x-api-key: YOUR_API_KEY`
+**Headers:**
+- `x-api-key: YOUR_API_KEY`
+- `x-session-id: YOUR_SESSION_ID` (required if using a stable user API key)
 
 **Request Body:**
 ```json
@@ -233,6 +321,7 @@ Send an image with optional caption.
 
 **Headers:** 
 - `x-api-key: YOUR_API_KEY`
+- `x-session-id: YOUR_SESSION_ID` (required if using a stable user API key)
 - `Content-Type: multipart/form-data`
 
 **Form Data:**
@@ -256,12 +345,40 @@ Send a document with optional caption.
 
 **Headers:**
 - `x-api-key: YOUR_API_KEY`
+- `x-session-id: YOUR_SESSION_ID` (required if using a stable user API key)
 - `Content-Type: multipart/form-data`
 
 **Form Data:**
 - `to`: "919876543210"
 - `caption`: "Important document" (optional)
 - `document`: File upload
+
+Notes:
+- The API passes through the uploaded file `mimetype` to WhatsApp.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "messageId": "3EB0C...",
+    "status": "sent"
+  }
+}
+```
+
+### POST /messages/send-video
+Send a video with optional caption.
+
+**Headers:**
+- `x-api-key: YOUR_API_KEY`
+- `x-session-id: YOUR_SESSION_ID` (required if using a stable user API key)
+- `Content-Type: multipart/form-data`
+
+**Form Data:**
+- `to`: "919876543210"
+- `caption`: "Optional caption" (optional)
+- `video`: File upload
 
 **Response (200):**
 ```json
@@ -322,6 +439,10 @@ Create a new webhook.
   ]
 }
 ```
+
+**Notes on events:**
+- Recommended canonical event name: `message.received`
+- Aliases accepted by the API: `message` (treated as `message.received`), `session` (treated as `session.status`)
 
 **Response (201):**
 ```json
@@ -417,6 +538,8 @@ When an event occurs, your webhook URL will receive:
 **Headers sent to your webhook:**
 - `Content-Type: application/json`
 - `X-Webhook-Secret: your_webhook_secret`
+- `X-Webhook-Signature: sha256=<hex_hmac_of_raw_json_body>`
+- `X-Webhook-Event: message.received`
 
 ---
 

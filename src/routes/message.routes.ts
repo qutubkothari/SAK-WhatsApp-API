@@ -35,8 +35,8 @@ router.post('/send', apiKeyLimiter, validateApiKey, async (req: any, res: Respon
       session_id: session.id,
       message_id: result.messageId || messageId,
       to_number: to,
-      message_type: 'text',
-      content: { text },
+      type: 'text',
+      content: JSON.stringify({ text }),
       status: result.status,
       created_at: db.fn.now()
     });
@@ -111,8 +111,8 @@ router.post('/send-image', apiKeyLimiter, validateApiKey, upload.single('image')
       session_id: session.id,
       message_id: result.messageId || messageId,
       to_number: to,
-      message_type: 'image',
-      content: { caption },
+      type: 'image',
+      content: JSON.stringify({ caption }),
       status: result.status,
       created_at: db.fn.now()
     });
@@ -161,7 +161,8 @@ router.post('/send-document', apiKeyLimiter, validateApiKey, upload.single('docu
       to,
       req.file.buffer,
       req.file.originalname,
-      caption
+      caption,
+      req.file.mimetype
     );
 
     const messageId = uuidv4();
@@ -170,8 +171,8 @@ router.post('/send-document', apiKeyLimiter, validateApiKey, upload.single('docu
       session_id: session.id,
       message_id: result.messageId || messageId,
       to_number: to,
-      message_type: 'document',
-      content: { filename: req.file.originalname, caption },
+      type: 'document',
+      content: JSON.stringify({ filename: req.file.originalname, caption }),
       status: result.status,
       created_at: db.fn.now()
     });
@@ -198,6 +199,66 @@ router.post('/send-document', apiKeyLimiter, validateApiKey, upload.single('docu
   }
 });
 
+// Send video
+router.post('/send-video', apiKeyLimiter, validateApiKey, upload.single('video'), async (req: any, res: Response): Promise<void> => {
+  try {
+    const { to, caption } = req.body;
+    const session = req.session;
+
+    if (!to || !req.file) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'to and video file are required'
+        }
+      });
+      return;
+    }
+
+    const result = await WhatsAppGateway.sendVideo(
+      session.session_id,
+      to,
+      req.file.buffer,
+      caption,
+      req.file.mimetype,
+      req.file.originalname
+    );
+
+    const messageId = uuidv4();
+    await db('messages').insert({
+      id: messageId,
+      session_id: session.id,
+      message_id: result.messageId || messageId,
+      to_number: to,
+      type: 'video',
+      content: JSON.stringify({ filename: req.file.originalname, caption, mimetype: req.file.mimetype }),
+      status: result.status,
+      created_at: db.fn.now()
+    });
+
+    logger.info(`Video sent via API: ${session.session_id} to ${to}`);
+
+    res.json({
+      success: true,
+      data: {
+        messageId: result.messageId,
+        status: result.status
+      }
+    });
+  } catch (error) {
+    logger.error('Send video error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SEND_VIDEO_FAILED',
+        message: 'Failed to send video'
+      }
+    });
+    return;
+  }
+});
+
 // Get message history
 router.get('/history', validateApiKey, async (req: any, res: Response): Promise<void> => {
   try {
@@ -210,7 +271,7 @@ router.get('/history', validateApiKey, async (req: any, res: Response): Promise<
       .orderBy('created_at', 'desc')
       .limit(limit)
       .offset(offset)
-      .select('message_id', 'to_number', 'message_type', 'status', 'created_at');
+      .select('message_id', 'to_number', db.raw('type as message_type'), 'status', 'created_at');
 
     res.json({
       success: true,
