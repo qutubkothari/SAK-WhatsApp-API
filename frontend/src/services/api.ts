@@ -27,7 +27,9 @@ export const sessionAPI = {
   getAll: () => api.get('/sessions'),
   getStatus: (sessionId: string) => api.get(`/sessions/${sessionId}/status`),
   getQR: (sessionId: string) => api.get(`/sessions/${sessionId}/qr`),
-  delete: (sessionId: string) => api.delete(`/sessions/${sessionId}`)
+  delete: (sessionId: string) => api.delete(`/sessions/${sessionId}`),
+  updateAutoReply: (sessionId: string, enabled: boolean, message: string) =>
+    api.put(`/sessions/${sessionId}/auto-reply`, { enabled, message })
 };
 
 export const messageAPI = {

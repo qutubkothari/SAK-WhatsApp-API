@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { sessionAPI } from '../services/api';
 import toast from 'react-hot-toast';
-import { Plus, Trash2, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, MessageSquare } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
 export default function Sessions() {
@@ -10,6 +10,8 @@ export default function Sessions() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<any>(null);
   const [qrCode, setQrCode] = useState('');
+  const [showAutoReplyModal, setShowAutoReplyModal] = useState(false);
+  const [autoReplyConfig, setAutoReplyConfig] = useState<any>({ enabled: false, message: '' });
 
   useEffect(() => {
     loadSessions();
@@ -62,6 +64,30 @@ export default function Sessions() {
     }
   };
 
+  const openAutoReplyModal = (session: any) => {
+    setSelectedSession(session);
+    setAutoReplyConfig({
+      enabled: session.autoReplyEnabled || false,
+      message: session.autoReplyMessage || 'Thank you for your message! We will get back to you soon.'
+    });
+    setShowAutoReplyModal(true);
+  };
+
+  const updateAutoReply = async () => {
+    try {
+      await sessionAPI.updateAutoReply(
+        selectedSession.sessionId || selectedSession.session_id,
+        autoReplyConfig.enabled,
+        autoReplyConfig.message
+      );
+      toast.success('Auto-reply settings updated');
+      setShowAutoReplyModal(false);
+      loadSessions();
+    } catch (error: any) {
+      toast.error(error.response?.data?.error?.message || 'Failed to update auto-reply');
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'connected': return 'bg-green-100 text-green-800';
@@ -111,6 +137,15 @@ export default function Sessions() {
                 >
                   <RefreshCw className="w-4 h-4 inline mr-1" />
                   Show QR
+                </button>
+              )}
+              {session.status === 'connected' && (
+                <button
+                  onClick={() => openAutoReplyModal(session)}
+                  className="flex-1 px-3 py-2 text-sm text-blue-600 bg-blue-50 rounded hover:bg-blue-100"
+                >
+                  <MessageSquare className="w-4 h-4 inline mr-1" />
+                  Auto-Reply
                 </button>
               )}
               <button
@@ -182,6 +217,52 @@ export default function Sessions() {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Reply Modal */}
+      {showAutoReplyModal && selectedSession && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold mb-4">Auto-Reply Settings</h2>
+            <div className="mb-4">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={autoReplyConfig.enabled}
+                  onChange={(e) => setAutoReplyConfig({ ...autoReplyConfig, enabled: e.target.checked })}
+                  className="w-4 h-4 text-primary rounded focus:ring-primary"
+                />
+                <span className="text-sm font-medium text-gray-700">Enable Auto-Reply</span>
+              </label>
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Auto-Reply Message
+              </label>
+              <textarea
+                value={autoReplyConfig.message}
+                onChange={(e) => setAutoReplyConfig({ ...autoReplyConfig, message: e.target.value })}
+                rows={4}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                placeholder="Enter your auto-reply message..."
+              />
+            </div>
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowAutoReplyModal(false)}
+                className="flex-1 px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={updateAutoReply}
+                className="flex-1 px-4 py-2 text-white bg-primary rounded-lg hover:bg-primary-dark"
+              >
+                Save
+              </button>
+            </div>
           </div>
         </div>
       )}

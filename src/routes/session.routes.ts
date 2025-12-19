@@ -91,7 +91,7 @@ router.get('/', authenticate, async (req: any, res: Response): Promise<void> => 
   try {
     const sessions = await db('sessions')
       .where({ user_id: req.user.id, is_active: true })
-      .select('session_id', 'name', 'status', 'api_key', 'phone_number', 'last_connected_at', 'created_at')
+      .select('session_id', 'name', 'status', 'api_key', 'phone_number', 'last_connected_at', 'created_at', 'auto_reply_enabled', 'auto_reply_message')
       .orderBy('created_at', 'desc');
 
     res.json({
@@ -104,7 +104,9 @@ router.get('/', authenticate, async (req: any, res: Response): Promise<void> => 
           apiKey: s.api_key,
           phoneNumber: s.phone_number,
           lastConnectedAt: s.last_connected_at,
-          createdAt: s.created_at
+          createdAt: s.created_at,
+          autoReplyEnabled: s.auto_reply_enabled,
+          autoReplyMessage: s.auto_reply_message
         }))
       }
     });
@@ -312,6 +314,64 @@ router.delete('/:sessionId', authenticate, async (req: any, res: Response): Prom
       error: {
         code: 'SESSION_DELETE_FAILED',
         message: 'Failed to delete session'
+      }
+    });
+    return;
+  }
+});
+
+// Update session auto-reply settings
+router.put('/:sessionId/auto-reply', authenticate, async (req: any, res: Response): Promise<void> => {
+  try {
+    const { sessionId } = req.params;
+    const { enabled, message } = req.body;
+
+    const session = await db('sessions')
+      .where({ session_id: sessionId, user_id: req.user.id })
+      .first();
+
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: 'SESSION_NOT_FOUND',
+          message: 'Session not found'
+        }
+      });
+      return;
+    }
+
+    const updateData: any = { updated_at: db.fn.now() };
+    
+    if (typeof enabled === 'boolean') {
+      updateData.auto_reply_enabled = enabled;
+    }
+    
+    if (message !== undefined) {
+      updateData.auto_reply_message = message;
+    }
+
+    await db('sessions')
+      .where({ id: session.id })
+      .update(updateData);
+
+    logger.info(`Auto-reply updated for session: ${sessionId}`);
+
+    res.json({
+      success: true,
+      message: 'Auto-reply settings updated',
+      data: {
+        autoReplyEnabled: updateData.auto_reply_enabled ?? session.auto_reply_enabled,
+        autoReplyMessage: updateData.auto_reply_message ?? session.auto_reply_message
+      }
+    });
+  } catch (error) {
+    logger.error('Update auto-reply error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'AUTO_REPLY_UPDATE_FAILED',
+        message: 'Failed to update auto-reply settings'
       }
     });
     return;

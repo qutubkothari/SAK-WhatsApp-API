@@ -20,6 +20,8 @@ interface SessionInfo {
   status: 'pending' | 'connected' | 'disconnected';
   qrCode?: string;
   phoneNumber?: string;
+  keepAliveInterval?: NodeJS.Timeout;
+  lastActivity?: number;
 }
 
 class WhatsAppGatewayService {
@@ -30,6 +32,27 @@ class WhatsAppGatewayService {
   private processingQueue = false;
   // LID to phone JID mapping: "@lid" -> "phone@s.whatsapp.net"
   private lidToPhoneMap: Map<string, string> = new Map();
+  // Track recent sent messages for conversation-based @lid mapping
+  private recentSentMessages: Map<string, { timestamp: number; sessionId: string }> = new Map();
+  // Keep-alive monitor
+  private keepAliveMonitor?: NodeJS.Timeout;
+
+  private cleanupOldSentMessages(): void {
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    for (const [phoneJid, data] of this.recentSentMessages.entries()) {
+      if (now - data.timestamp > ONE_DAY) {
+        this.recentSentMessages.delete(phoneJid);
+      }
+    }
+    // Keep max 200 entries
+    if (this.recentSentMessages.size > 200) {
+      const sorted = Array.from(this.recentSentMessages.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const toDelete = sorted.slice(0, this.recentSentMessages.size - 200);
+      toDelete.forEach(([key]) => this.recentSentMessages.delete(key));
+    }
+  }
 
   private withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -72,6 +95,9 @@ class WhatsAppGatewayService {
 
     // Start queue processor
     this.startQueueProcessor();
+
+    // Start keep-alive monitor
+    this.startKeepAliveMonitor();
 
     logger.info('WhatsApp Gateway initialized');
   }
@@ -195,6 +221,10 @@ class WhatsAppGatewayService {
         // Clear in-memory state for this session (if this socket is still the current one)
         const current = this.sessions.get(sessionId);
         if (current?.socket === sock) {
+          // Clear keep-alive interval
+          if (current.keepAliveInterval) {
+            clearInterval(current.keepAliveInterval);
+          }
           this.sessions.delete(sessionId);
         }
 
@@ -227,6 +257,9 @@ class WhatsAppGatewayService {
 
         // Process queued messages
         await this.processQueueForSession(sessionId);
+
+        // Setup keep-alive for this session
+        this.setupSessionKeepAlive(sessionId);
       }
     });
 
@@ -240,6 +273,12 @@ class WhatsAppGatewayService {
   }
 
   async handleIncomingMessage(sessionId: string, dbSessionId: string, messages: WAMessage[]) {
+    // Update last activity timestamp
+    const sessionInfo = this.sessions.get(sessionId);
+    if (sessionInfo) {
+      sessionInfo.lastActivity = Date.now();
+    }
+
     const webhooks = await db('webhooks')
       .where({ session_id: dbSessionId, is_active: true });
 
@@ -308,9 +347,32 @@ class WhatsAppGatewayService {
           this.lidToPhoneMap.set(remoteJid, participant);
           logger.info(`Stored LID mapping: ${remoteJid} → ${participant}`);
         } else {
-          // Cannot resolve @lid to phone number - skip webhook (replying would look like spam)
-          logger.error(`SKIPPED @lid message - cannot resolve to phone number: ${remoteJid}. Message will not trigger webhook.`);
-          continue; // Skip this message entirely
+          // Try to infer mapping from recent conversation context
+          // If we recently sent to a phone number and now receive @lid, they're likely the same person
+          const recentMatch = Array.from(this.recentSentMessages.entries())
+            .filter(([_, data]) => data.sessionId === sessionId)
+            .sort((a, b) => b[1].timestamp - a[1].timestamp)
+            .find(([phoneJid, data]) => {
+              // Match if sent within last 10 minutes
+              return (Date.now() - data.timestamp) < 10 * 60 * 1000;
+            });
+          
+          if (recentMatch) {
+            const [phoneJid] = recentMatch;
+            waId = phoneJid.split('@')[0];
+            fromNumber = waId.startsWith('+') ? waId : `+${waId}`;
+            fromJid = phoneJid;
+            
+            // Store inferred mapping
+            this.lidToPhoneMap.set(remoteJid, phoneJid);
+            logger.info(`Inferred LID mapping from conversation: ${remoteJid} → ${phoneJid}`);
+          } else {
+            // Cannot resolve to phone, but send webhook anyway with @lid (CRM can handle it)
+            // Reply prevention is handled in send methods
+            logger.warn(`@lid message without phone resolution: ${remoteJid}. Sending webhook with @lid.`);
+            fromNumber = waId; // Use LID number as fallback
+            fromJid = remoteJid;
+          }
         }
       }
 
@@ -357,6 +419,9 @@ class WhatsAppGatewayService {
           await this.callWebhook(webhook.url, webhook.secret, messageData);
         }
       }
+
+      // Check for auto-reply
+      await this.handleAutoReply(sessionId, dbSessionId, fromJid, messageData.text);
     }
   }
 
@@ -439,6 +504,14 @@ class WhatsAppGatewayService {
         'SEND_MESSAGE'
       );
       
+      // Update last activity
+      sessionInfo.lastActivity = Date.now();
+      
+      // Track sent message for conversation-based @lid mapping
+      const phoneJid = targetJid.includes('@s.whatsapp.net') ? targetJid : this.formatPhoneNumber(to);
+      this.recentSentMessages.set(phoneJid, { timestamp: Date.now(), sessionId });
+      this.cleanupOldSentMessages();
+      
       return {
         success: true,
         messageId: sentMsg?.key?.id,
@@ -487,6 +560,11 @@ class WhatsAppGatewayService {
         25000,
         'SEND_IMAGE'
       );
+
+      // Track sent message for conversation-based @lid mapping
+      const phoneJid = targetJid.includes('@s.whatsapp.net') ? targetJid : this.formatPhoneNumber(to);
+      this.recentSentMessages.set(phoneJid, { timestamp: Date.now(), sessionId });
+      this.cleanupOldSentMessages();
 
       return {
         success: true,
@@ -554,6 +632,11 @@ class WhatsAppGatewayService {
         'SEND_DOCUMENT'
       );
 
+      // Track sent message for conversation-based @lid mapping
+      const phoneJid = targetJid.includes('@s.whatsapp.net') ? targetJid : this.formatPhoneNumber(to);
+      this.recentSentMessages.set(phoneJid, { timestamp: Date.now(), sessionId });
+      this.cleanupOldSentMessages();
+
       return {
         success: true,
         messageId: sentMsg?.key?.id,
@@ -618,6 +701,11 @@ class WhatsAppGatewayService {
         45000,
         'SEND_VIDEO'
       );
+
+      // Track sent message for conversation-based @lid mapping
+      const phoneJid = targetJid.includes('@s.whatsapp.net') ? targetJid : this.formatPhoneNumber(to);
+      this.recentSentMessages.set(phoneJid, { timestamp: Date.now(), sessionId });
+      this.cleanupOldSentMessages();
 
       return {
         success: true,
@@ -770,6 +858,108 @@ class WhatsAppGatewayService {
         }
         logger.error('Queue processing error:', error);
       }
+    }
+  }
+
+  private setupSessionKeepAlive(sessionId: string) {
+    const sessionInfo = this.sessions.get(sessionId);
+    if (!sessionInfo) return;
+
+    // Clear any existing keep-alive
+    if (sessionInfo.keepAliveInterval) {
+      clearInterval(sessionInfo.keepAliveInterval);
+    }
+
+    // Initialize last activity
+    sessionInfo.lastActivity = Date.now();
+
+    // Ping every 30 seconds to keep connection alive
+    sessionInfo.keepAliveInterval = setInterval(async () => {
+      try {
+        const session = this.sessions.get(sessionId);
+        if (session && session.status === 'connected') {
+          // Query WhatsApp servers to keep connection alive
+          await session.socket.query({
+            tag: 'iq',
+            attrs: {
+              id: uuidv4(),
+              xmlns: 'w:p',
+              type: 'get',
+              to: '@s.whatsapp.net'
+            }
+          });
+          logger.debug(`Keep-alive ping sent for session: ${sessionId}`);
+        }
+      } catch (error) {
+        logger.warn(`Keep-alive ping failed for session ${sessionId}:`, error);
+      }
+    }, 30000); // 30 seconds
+
+    logger.info(`Keep-alive setup for session: ${sessionId}`);
+  }
+
+  private startKeepAliveMonitor() {
+    // Monitor all sessions every 2 minutes
+    this.keepAliveMonitor = setInterval(async () => {
+      const now = Date.now();
+      const INACTIVE_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+
+      for (const [sessionId, sessionInfo] of this.sessions.entries()) {
+        if (sessionInfo.status === 'connected') {
+          const timeSinceActivity = now - (sessionInfo.lastActivity || 0);
+          
+          if (timeSinceActivity > INACTIVE_THRESHOLD) {
+            logger.warn(`Session ${sessionId} inactive for ${Math.floor(timeSinceActivity / 1000)}s, checking connection...`);
+            
+            try {
+              // Try to fetch own profile to verify connection
+              await sessionInfo.socket.query({
+                tag: 'iq',
+                attrs: {
+                  id: uuidv4(),
+                  xmlns: 'w:p',
+                  type: 'get',
+                  to: '@s.whatsapp.net'
+                }
+              });
+              sessionInfo.lastActivity = now;
+              logger.info(`Session ${sessionId} connection verified`);
+            } catch (error) {
+              logger.error(`Session ${sessionId} connection check failed, may need reconnection:`, error);
+            }
+          }
+        }
+      }
+    }, 120000); // 2 minutes
+
+    logger.info('Keep-alive monitor started');
+  }
+
+  private async handleAutoReply(sessionId: string, dbSessionId: string, fromJid: string, incomingText: string) {
+    try {
+      // Get session settings
+      const session = await db('sessions')
+        .where({ id: dbSessionId })
+        .first();
+
+      if (!session || !session.auto_reply_enabled) {
+        return;
+      }
+
+      // Don't auto-reply to empty messages or media-only messages
+      if (!incomingText || incomingText.trim().length === 0) {
+        return;
+      }
+
+      const autoReplyMessage = session.auto_reply_message || 
+        'Thank you for your message! We will get back to you soon.';
+
+      logger.info(`Sending auto-reply to ${fromJid} for session ${sessionId}`);
+
+      // Send auto-reply using existing sendMessage logic
+      await this.sendMessage(sessionId, fromJid, autoReplyMessage);
+    } catch (error) {
+      logger.error(`Auto-reply error for session ${sessionId}:`, error);
     }
   }
 }
