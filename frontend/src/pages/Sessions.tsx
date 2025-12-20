@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { sessionAPI } from '../services/api';
+import { sessionAPI, webhookAPI } from '../services/api';
 import toast from 'react-hot-toast';
 import { Plus, Trash2, RefreshCw, MessageSquare } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -12,6 +12,9 @@ export default function Sessions() {
   const [qrCode, setQrCode] = useState('');
   const [qrConnected, setQrConnected] = useState(false);
   const [connectedApiKey, setConnectedApiKey] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [connectedWebhookSecret, setConnectedWebhookSecret] = useState<string | null>(null);
+  const [savingWebhook, setSavingWebhook] = useState(false);
   const [showAutoReplyModal, setShowAutoReplyModal] = useState(false);
   const [autoReplyConfig, setAutoReplyConfig] = useState<any>({ enabled: false, message: '' });
 
@@ -77,12 +80,49 @@ export default function Sessions() {
     if (selectedSession && qrCode && sessionId) {
       setQrConnected(false);
       setConnectedApiKey(null);
+      setWebhookUrl('');
+      setConnectedWebhookSecret(null);
+      setSavingWebhook(false);
       pollConnectionAndRevealKey(sessionId);
       iv = setInterval(() => pollConnectionAndRevealKey(sessionId), 2500);
     }
     return () => iv && clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSession?.sessionId, selectedSession?.session_id, qrCode]);
+
+  const saveWebhookFromQrModal = async () => {
+    const sessionId = selectedSession?.sessionId || selectedSession?.session_id;
+    if (!sessionId) return;
+
+    const url = webhookUrl.trim();
+    if (!url) {
+      toast.error('Please enter a webhook URL');
+      return;
+    }
+
+    setSavingWebhook(true);
+    try {
+      const res = await webhookAPI.create({
+        sessionId,
+        url,
+        events: ['message.received', 'message.sent', 'session.status']
+      });
+
+      const data = res.data?.data || res.data;
+      const secret = data?.secret as string | undefined;
+      if (!secret) {
+        toast.error('Webhook saved, but secret was missing in response');
+        return;
+      }
+
+      setConnectedWebhookSecret(secret);
+      toast.success('Webhook saved');
+    } catch (error: any) {
+      toast.error(error.response?.data?.error?.message || 'Failed to save webhook');
+    } finally {
+      setSavingWebhook(false);
+    }
+  };
 
   const deleteSession = async (sessionId: string) => {
     if (!confirm('Delete this session?')) return;
@@ -249,6 +289,33 @@ export default function Sessions() {
                 ) : (
                   <p className="text-xs text-gray-600 text-center">Fetching key…</p>
                 )}
+
+                <div className="mt-4">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Webhook URL (enter after QR is scanned)</label>
+                  <input
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    type="url"
+                    placeholder="https://your-domain.com/webhook"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  />
+                  <button
+                    onClick={saveWebhookFromQrModal}
+                    disabled={savingWebhook || !webhookUrl.trim()}
+                    className="w-full mt-2 px-4 py-2 text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-60"
+                  >
+                    {savingWebhook ? 'Saving…' : 'Save Webhook & Show Secret'}
+                  </button>
+
+                  {connectedWebhookSecret ? (
+                    <div className="mt-3">
+                      <p className="text-xs text-gray-700 mb-1">Webhook Secret:</p>
+                      <div className="bg-gray-50 border border-gray-200 rounded p-2 text-xs break-all font-mono">
+                        {connectedWebhookSecret}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             )}
             <button
@@ -257,6 +324,9 @@ export default function Sessions() {
                 setQrCode('');
                 setQrConnected(false);
                 setConnectedApiKey(null);
+                setWebhookUrl('');
+                setConnectedWebhookSecret(null);
+                setSavingWebhook(false);
               }}
               className="w-full px-4 py-2 text-white bg-primary rounded-lg hover:bg-primary-dark"
             >
