@@ -16,6 +16,8 @@ export default function Onboarding() {
   const [session, setSession] = useState<Session | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [webhookId, setWebhookId] = useState<string | null>(null);
   const [sendingTest, setSendingTest] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -32,6 +34,9 @@ export default function Onboarding() {
     setApiKey(null);
     setSession(null);
     setQr(null);
+    setWebhookUrl('');
+    setWebhookSecret(null);
+    setWebhookId(null);
     setStep(1);
     if (message) setErrorMsg(message);
     try {
@@ -102,6 +107,12 @@ export default function Onboarding() {
       if (typeof parsed?.webhookUrl === 'string') {
         setWebhookUrl(parsed.webhookUrl);
       }
+      if (typeof parsed?.webhookSecret === 'string') {
+        setWebhookSecret(parsed.webhookSecret);
+      }
+      if (typeof parsed?.webhookId === 'string') {
+        setWebhookId(parsed.webhookId);
+      }
       if (typeof parsed?.step === 'number') {
         setStep(Math.max(1, Math.min(6, parsed.step)));
       }
@@ -137,12 +148,12 @@ export default function Onboarding() {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ step, apiKey, session, webhookUrl })
+        JSON.stringify({ step, apiKey, session, webhookUrl, webhookSecret, webhookId })
       );
     } catch {
       // ignore
     }
-  }, [step, apiKey, session, webhookUrl]);
+  }, [step, apiKey, session, webhookUrl, webhookSecret, webhookId]);
 
   async function createApiKey() {
     setErrorMsg(null);
@@ -302,8 +313,25 @@ export default function Onboarding() {
 
   async function saveWebhook() {
     if (!session) return;
-    await api.post('/webhooks', { sessionId: session.sessionId, url: webhookUrl, events: ['message.received','message.status','session.status'] });
-    next();
+    setErrorMsg(null);
+    try {
+      const res = await api.post('/webhooks', {
+        sessionId: session.sessionId,
+        url: webhookUrl,
+        events: ['message.received', 'message.status', 'session.status']
+      });
+
+      const data = res.data?.data || res.data;
+      const secret = data?.secret as string | undefined;
+      const id = (data?.webhookId || data?.webhook_id) as string | undefined;
+
+      if (secret) setWebhookSecret(secret);
+      if (id) setWebhookId(id);
+
+      next();
+    } catch (err: any) {
+      setErrorMsg(err?.response?.data?.error?.message || 'Failed to save webhook.');
+    }
   }
 
   async function sendTestMessage() {
@@ -338,7 +366,11 @@ export default function Onboarding() {
           <h2 className="font-medium">Step 1: Create API Key & Session</h2>
           {apiKey && session ? (
             <div className="mt-2 space-y-1">
-              <p className="text-sm">Key: <code className="bg-gray-100 px-1 py-0.5 rounded">{apiKey.key}</code></p>
+              {session.status === 'connected' ? (
+                <p className="text-sm">Key: <code className="bg-gray-100 px-1 py-0.5 rounded">{apiKey.key}</code></p>
+              ) : (
+                <p className="text-sm text-gray-600">Key will appear after you scan the QR code and the session connects.</p>
+              )}
               <p className="text-sm">Session ID: <code className="bg-gray-100 px-1 py-0.5 rounded">{session.sessionId}</code></p>
               <p className="text-sm">Session: {session.name} ({session.status})</p>
               <button className="mt-3 btn" onClick={next}>Continue</button>
@@ -382,10 +414,26 @@ export default function Onboarding() {
 
         <div className={`border rounded p-4 ${step===5? 'border-blue-500':'border-gray-200'}`}>
           <h2 className="font-medium">Step 4: Set Webhook URL</h2>
+          {apiKey && session ? (
+            <div className="mt-2 space-y-1">
+              <p className="text-sm">Session is connected. Use this Key in your integrations:</p>
+              <p className="text-sm">Key: <code className="bg-gray-100 px-1 py-0.5 rounded">{apiKey.key}</code></p>
+              <p className="text-sm">Session ID: <code className="bg-gray-100 px-1 py-0.5 rounded">{session.sessionId}</code></p>
+              {webhookSecret ? (
+                <>
+                  <p className="text-sm mt-2">Webhook Secret (store this securely):</p>
+                  <p className="text-sm"><code className="bg-gray-100 px-1 py-0.5 rounded break-all">{webhookSecret}</code></p>
+                </>
+              ) : null}
+            </div>
+          ) : null}
           <div className="mt-2 flex gap-2">
             <input className="input flex-1" placeholder="https://yourapp.example.com/sak/webhook" value={webhookUrl} onChange={(e)=>setWebhookUrl(e.target.value)} />
-            <button className="btn" onClick={saveWebhook} disabled={!webhookUrl || !session}>Save</button>
+            <button className="btn" onClick={saveWebhook} disabled={!webhookUrl || !session || session.status !== 'connected'}>Save</button>
           </div>
+          {session && session.status !== 'connected' ? (
+            <p className="text-xs text-gray-600 mt-2">Connect the session (scan QR) before saving a webhook.</p>
+          ) : null}
         </div>
 
         <div className={`border rounded p-4 ${step===6? 'border-blue-500':'border-gray-200'}`}>

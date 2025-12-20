@@ -10,6 +10,8 @@ export default function Sessions() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<any>(null);
   const [qrCode, setQrCode] = useState('');
+  const [qrConnected, setQrConnected] = useState(false);
+  const [connectedApiKey, setConnectedApiKey] = useState<string | null>(null);
   const [showAutoReplyModal, setShowAutoReplyModal] = useState(false);
   const [autoReplyConfig, setAutoReplyConfig] = useState<any>({ enabled: false, message: '' });
 
@@ -47,10 +49,40 @@ export default function Sessions() {
     try {
       const response = await sessionAPI.getQR(sessionId);
       setQrCode(response.data.data.qrCode);
+      setQrConnected(Boolean(response.data.data.connected));
     } catch (error) {
       toast.error('QR code not available');
     }
   };
+
+  const pollConnectionAndRevealKey = async (sessionId: string) => {
+    try {
+      const res = await sessionAPI.getStatus(sessionId);
+      const connected = Boolean(res.data?.data?.connected);
+      if (!connected) return;
+
+      setQrConnected(true);
+      await loadSessions();
+      const updated = sessions.find((s) => (s.sessionId || s.session_id) === sessionId);
+      const key = (updated?.apiKey || updated?.api_key || selectedSession?.apiKey || selectedSession?.api_key) as string | undefined;
+      if (key) setConnectedApiKey(key);
+    } catch {
+      // ignore polling errors
+    }
+  };
+
+  useEffect(() => {
+    let iv: any;
+    const sessionId = selectedSession?.sessionId || selectedSession?.session_id;
+    if (selectedSession && qrCode && sessionId) {
+      setQrConnected(false);
+      setConnectedApiKey(null);
+      pollConnectionAndRevealKey(sessionId);
+      iv = setInterval(() => pollConnectionAndRevealKey(sessionId), 2500);
+    }
+    return () => iv && clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSession?.sessionId, selectedSession?.session_id, qrCode]);
 
   const deleteSession = async (sessionId: string) => {
     if (!confirm('Delete this session?')) return;
@@ -205,13 +237,26 @@ export default function Sessions() {
             <div className="flex justify-center mb-4">
               <QRCodeSVG value={qrCode} size={256} />
             </div>
-            <p className="text-sm text-gray-600 text-center mb-4">
-              Scan this QR code with WhatsApp to connect your session
-            </p>
+            {!qrConnected ? (
+              <p className="text-sm text-gray-600 text-center mb-4">
+                Scan this QR code with WhatsApp to connect your session
+              </p>
+            ) : (
+              <div className="mb-4">
+                <p className="text-sm text-green-700 text-center mb-2">Connected! Your secret key is now available.</p>
+                {connectedApiKey ? (
+                  <p className="text-xs text-gray-700 break-all">API Key: <span className="font-mono">{connectedApiKey}</span></p>
+                ) : (
+                  <p className="text-xs text-gray-600 text-center">Fetching key…</p>
+                )}
+              </div>
+            )}
             <button
               onClick={() => {
                 setSelectedSession(null);
                 setQrCode('');
+                setQrConnected(false);
+                setConnectedApiKey(null);
               }}
               className="w-full px-4 py-2 text-white bg-primary rounded-lg hover:bg-primary-dark"
             >

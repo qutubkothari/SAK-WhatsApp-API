@@ -186,6 +186,69 @@ export const validateApiKey = async (
   }
 };
 
+// Flexible auth: accepts JWT OR user-level API key
+export const authenticateFlexible = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  // Try JWT first
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+      const user = await db('users')
+        .where({ id: decoded.userId, is_active: true })
+        .first();
+
+      if (user) {
+        req.user = user;
+        next();
+        return;
+      }
+    } catch (error) {
+      // JWT invalid, try API key fallback
+    }
+  }
+
+  // Try user-level API key
+  const apiKey = req.headers['x-api-key'] as string;
+  if (apiKey) {
+    try {
+      const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+      const userKey = await db('api_keys')
+        .where({ key_hash: keyHash, is_active: true })
+        .first();
+
+      if (userKey) {
+        const user = await db('users')
+          .where({ id: userKey.user_id, is_active: true })
+          .first();
+
+        if (user) {
+          await db('api_keys')
+            .where({ id: userKey.id })
+            .update({ last_used_at: db.fn.now() });
+
+          req.user = user;
+          next();
+          return;
+        }
+      }
+    } catch (error) {
+      // API key validation failed
+    }
+  }
+
+  res.status(401).json({
+    success: false,
+    error: {
+      code: 'AUTHENTICATION_REQUIRED',
+      message: 'Authentication required: provide JWT token (Authorization: Bearer) or user-level API key (x-api-key header)'
+    }
+  });
+};
+
 export const isAdmin = (req: AuthRequest, res: Response, next: NextFunction): void => {
   if (req.user?.email !== process.env.ADMIN_EMAIL) {
     res.status(403).json({

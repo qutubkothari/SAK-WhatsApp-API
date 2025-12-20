@@ -20,3 +20,8 @@ logs/
 .cache/
 temp/
 uploads/
+
+# Local deployment artifacts
+deploy_*.zip
+frontend-dist.tar.gz
+temp_deploy/

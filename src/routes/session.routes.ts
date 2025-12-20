@@ -1,7 +1,7 @@
 ﻿import { Router, Response } from 'express';
 import db from '../config/database';
 import { v4 as uuidv4 } from 'uuid';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authenticateFlexible } from '../middleware/auth';
 import WhatsAppGateway from '../services/whatsapp-gateway.service';
 import logger from '../utils/logger';
 import crypto from 'crypto';
@@ -9,9 +9,9 @@ import crypto from 'crypto';
 const router = Router();
 
 // Create session
-router.post('/', authenticate, async (req: any, res: Response): Promise<void> => {
+router.post('/', authenticateFlexible, async (req: any, res: Response): Promise<void> => {
   try {
-    const { name } = req.body;
+    const { name, webhook } = req.body;
     const userId = req.user.id;
 
     // Check plan limits
@@ -43,8 +43,9 @@ router.post('/', authenticate, async (req: any, res: Response): Promise<void> =>
     const sessionId = uuidv4();
     const apiKey = crypto.randomBytes(32).toString('hex');
 
+    const dbSessionId = uuidv4();
     await db('sessions').insert({
-      id: uuidv4(),
+      id: dbSessionId,
       user_id: userId,
       session_id: sessionId,
       name: name || `Session ${sessionCount + 1}`,
@@ -54,11 +55,35 @@ router.post('/', authenticate, async (req: any, res: Response): Promise<void> =>
       updated_at: db.fn.now()
     });
 
-    const dbSession = await db('sessions')
-      .where({ session_id: sessionId })
-      .first();
+    // Register webhook if provided
+    let webhookData = null;
+    if (webhook && webhook.url) {
+      const webhookId = uuidv4();
+      const webhookSecret = crypto.randomBytes(32).toString('hex');
+      const events = webhook.events || ['message.received', 'message.sent', 'status.change'];
+      
+      await db('webhooks').insert({
+        id: webhookId,
+        session_id: dbSessionId,
+        url: webhook.url,
+        secret: webhookSecret,
+        events: JSON.stringify(events),
+        is_active: true,
+        created_at: db.fn.now(),
+        updated_at: db.fn.now()
+      });
 
-    await WhatsAppGateway.connectSession(sessionId, dbSession.id);
+      webhookData = {
+        id: webhookId,
+        url: webhook.url,
+        events,
+        secret: webhookSecret
+      };
+
+      logger.info(`Webhook registered during session creation: ${sessionId}`);
+    }
+
+    await WhatsAppGateway.connectSession(sessionId, dbSessionId);
 
     logger.info(`Session created: ${sessionId} for user ${userId}`);
 
@@ -69,7 +94,8 @@ router.post('/', authenticate, async (req: any, res: Response): Promise<void> =>
         apiKey,
         name: name || `Session ${sessionCount + 1}`,
         status: 'pending',
-        message: 'Scan QR code to connect'
+        message: 'Scan QR code to connect',
+        webhook: webhookData
       }
     });
     return;
@@ -87,7 +113,7 @@ router.post('/', authenticate, async (req: any, res: Response): Promise<void> =>
 });
 
 // Get all sessions
-router.get('/', authenticate, async (req: any, res: Response): Promise<void> => {
+router.get('/', authenticateFlexible, async (req: any, res: Response): Promise<void> => {
   try {
     const sessions = await db('sessions')
       .where({ user_id: req.user.id, is_active: true })
@@ -124,7 +150,7 @@ router.get('/', authenticate, async (req: any, res: Response): Promise<void> => 
 });
 
 // Get session status
-router.get('/:sessionId/status', authenticate, async (req: any, res: Response): Promise<void> => {
+router.get('/:sessionId/status', authenticateFlexible, async (req: any, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
 
@@ -175,7 +201,7 @@ router.get('/:sessionId/status', authenticate, async (req: any, res: Response): 
 });
 
 // Get session details
-router.get('/:sessionId', authenticate, async (req: any, res: Response): Promise<void> => {
+router.get('/:sessionId', authenticateFlexible, async (req: any, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
 
@@ -220,7 +246,7 @@ router.get('/:sessionId', authenticate, async (req: any, res: Response): Promise
 });
 
 // Get QR code
-router.get('/:sessionId/qr', authenticate, async (req: any, res: Response): Promise<void> => {
+router.get('/:sessionId/qr', authenticateFlexible, async (req: any, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
 
@@ -272,7 +298,7 @@ router.get('/:sessionId/qr', authenticate, async (req: any, res: Response): Prom
 });
 
 // Delete session
-router.delete('/:sessionId', authenticate, async (req: any, res: Response): Promise<void> => {
+router.delete('/:sessionId', authenticateFlexible, async (req: any, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
 
@@ -321,7 +347,7 @@ router.delete('/:sessionId', authenticate, async (req: any, res: Response): Prom
 });
 
 // Update session auto-reply settings
-router.put('/:sessionId/auto-reply', authenticate, async (req: any, res: Response): Promise<void> => {
+router.put('/:sessionId/auto-reply', authenticateFlexible, async (req: any, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
     const { enabled, message } = req.body;
