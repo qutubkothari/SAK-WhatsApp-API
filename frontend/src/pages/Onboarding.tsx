@@ -327,8 +327,6 @@ export default function Onboarding() {
 
       if (secret) setWebhookSecret(secret);
       if (id) setWebhookId(id);
-
-      next();
     } catch (err: any) {
       setErrorMsg(err?.response?.data?.error?.message || 'Failed to save webhook.');
     }
@@ -423,14 +421,17 @@ export default function Onboarding() {
                 <>
                   <p className="text-sm mt-2">Webhook Secret (store this securely):</p>
                   <p className="text-sm"><code className="bg-gray-100 px-1 py-0.5 rounded break-all">{webhookSecret}</code></p>
+                  <button className="mt-3 btn" onClick={next}>Continue</button>
                 </>
               ) : null}
             </div>
           ) : null}
-          <div className="mt-2 flex gap-2">
-            <input className="input flex-1" placeholder="https://yourapp.example.com/sak/webhook" value={webhookUrl} onChange={(e)=>setWebhookUrl(e.target.value)} />
-            <button className="btn" onClick={saveWebhook} disabled={!webhookUrl || !session || session.status !== 'connected'}>Save</button>
-          </div>
+          {!webhookSecret ? (
+            <div className="mt-2 flex gap-2">
+              <input className="input flex-1" placeholder="https://yourapp.example.com/sak/webhook" value={webhookUrl} onChange={(e)=>setWebhookUrl(e.target.value)} />
+              <button className="btn" onClick={saveWebhook} disabled={!webhookUrl || !session || session.status !== 'connected'}>Save</button>
+            </div>
+          ) : null}
           {session && session.status !== 'connected' ? (
             <p className="text-xs text-gray-600 mt-2">Connect the session (scan QR) before saving a webhook.</p>
           ) : null}
