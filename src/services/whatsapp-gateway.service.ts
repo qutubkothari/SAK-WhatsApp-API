@@ -359,16 +359,10 @@ class WhatsAppGatewayService {
         `Inbound message: sessionId=${sessionId} from=${fromJid} wa_id=${waId} messageId=${message.key.id} type=${type}`
       );
 
-      // Only process webhook and auto-reply if we have a phone-based JID (never @lid)
-      if (!fromJid.includes('@s.whatsapp.net')) {
-        logger.warn(`Skipping webhook and auto-reply for non-phone JID: ${fromJid}`);
-        continue;
-      }
-
       const messageData: any = {
         event: 'message.received',
         sessionId,
-        from: fromJid, // ALWAYS phone-based JID (never @lid)
+        from: fromJid,
         from_jid: fromJid,
         messageId: message.key.id,
         timestamp: message.messageTimestamp,
@@ -399,8 +393,12 @@ class WhatsAppGatewayService {
         }
       }
 
-      // Check for auto-reply
-      await this.handleAutoReply(sessionId, dbSessionId, fromJid, messageData.text);
+      // Only auto-reply if we have a phone-based JID (skip @lid to prevent wrong routing)
+      if (fromJid.includes('@s.whatsapp.net')) {
+        await this.handleAutoReply(sessionId, dbSessionId, fromJid, messageData.text);
+      } else {
+        logger.info(`Skipping auto-reply for non-phone JID: ${fromJid} (webhook sent)`);
+      }
     }
   }
 
