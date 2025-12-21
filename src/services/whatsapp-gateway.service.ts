@@ -347,32 +347,11 @@ class WhatsAppGatewayService {
           this.lidToPhoneMap.set(remoteJid, participant);
           logger.info(`Stored LID mapping: ${remoteJid} → ${participant}`);
         } else {
-          // Try to infer mapping from recent conversation context
-          // If we recently sent to a phone number and now receive @lid, they're likely the same person
-          const recentMatch = Array.from(this.recentSentMessages.entries())
-            .filter(([_, data]) => data.sessionId === sessionId)
-            .sort((a, b) => b[1].timestamp - a[1].timestamp)
-            .find(([phoneJid, data]) => {
-              // Match if sent within last 10 minutes
-              return (Date.now() - data.timestamp) < 10 * 60 * 1000;
-            });
-          
-          if (recentMatch) {
-            const [phoneJid] = recentMatch;
-            waId = phoneJid.split('@')[0];
-            fromNumber = waId.startsWith('+') ? waId : `+${waId}`;
-            fromJid = phoneJid;
-            
-            // Store inferred mapping
-            this.lidToPhoneMap.set(remoteJid, phoneJid);
-            logger.info(`Inferred LID mapping from conversation: ${remoteJid} → ${phoneJid}`);
-          } else {
-            // Cannot resolve to phone, but send webhook anyway with @lid (CRM can handle it)
-            // Reply prevention is handled in send methods
-            logger.warn(`@lid message without phone resolution: ${remoteJid}. Sending webhook with @lid.`);
-            fromNumber = waId; // Use LID number as fallback
-            fromJid = remoteJid;
-          }
+          // Cannot resolve @lid to phone without participant data
+          // Do NOT infer from recent conversations as this causes routing bugs
+          logger.warn(`@lid message without phone resolution: ${remoteJid}. No participant data available.`);
+          fromNumber = waId; // Use LID number as fallback
+          fromJid = remoteJid;
         }
       }
 
@@ -380,9 +359,9 @@ class WhatsAppGatewayService {
         `Inbound message: sessionId=${sessionId} from=${fromJid} wa_id=${waId} messageId=${message.key.id} type=${type}`
       );
 
-      // Only send webhook if we have a phone-based JID (never @lid)
+      // Only process webhook and auto-reply if we have a phone-based JID (never @lid)
       if (!fromJid.includes('@s.whatsapp.net')) {
-        logger.warn(`Skipping webhook for non-phone JID: ${fromJid}`);
+        logger.warn(`Skipping webhook and auto-reply for non-phone JID: ${fromJid}`);
         continue;
       }
 
@@ -572,6 +551,7 @@ class WhatsAppGatewayService {
         status: 'sent'
       };
     } catch (error: any) {
+      logger.error(`Send image error (session: ${sessionId}, to: ${to}):`, error);
       return {
         success: false,
         error: error.message,
@@ -713,6 +693,7 @@ class WhatsAppGatewayService {
         status: 'sent'
       };
     } catch (error: any) {
+      logger.error(`Send video error (session: ${sessionId}, to: ${to}):`, error);
       return {
         success: false,
         error: error.message,

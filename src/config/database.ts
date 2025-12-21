@@ -26,7 +26,8 @@ db.raw('SELECT 1')
   })
   .catch((error) => {
     console.error('❌ Database connection failed:', error);
-    process.exit(1);
+    console.warn('⚠️  Server will continue but database operations will fail');
+    console.warn('⚠️  Please check your .env file DB_HOST setting');
   });
 
 export default db;

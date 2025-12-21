@@ -117,6 +117,18 @@ router.post('/send-image', apiKeyLimiter, validateApiKey, upload.single('image')
       created_at: db.fn.now()
     });
 
+    if (!result.success && result.status === 'failed') {
+      logger.error(`Image failed to send via API: ${session.session_id} to ${to}, error: ${result.error}`);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'SEND_IMAGE_FAILED',
+          message: result.error || 'Failed to send image'
+        }
+      });
+      return;
+    }
+
     logger.info(`Image sent via API: ${session.session_id} to ${to}`);
 
     res.json({
@@ -236,6 +248,18 @@ router.post('/send-video', apiKeyLimiter, validateApiKey, upload.single('video')
       status: result.status,
       created_at: db.fn.now()
     });
+
+    if (!result.success && result.status === 'failed') {
+      logger.error(`Video failed to send via API: ${session.session_id} to ${to}, error: ${result.error}`);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'SEND_VIDEO_FAILED',
+          message: result.error || 'Failed to send video'
+        }
+      });
+      return;
+    }
 
     logger.info(`Video sent via API: ${session.session_id} to ${to}`);
 
